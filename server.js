@@ -28,6 +28,21 @@ const { parse } = require('querystring');
 const quizzes = {};
 
 /**
+ * Helper to compare two arrays of numbers for set equality (order‑insensitive).
+ * @param {number[]} a
+ * @param {number[]} b
+ */
+function arraysEqualUnordered(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  for (let i = 0; i < sa.length; i++) {
+    if (sa[i] !== sb[i]) return false;
+  }
+  return true;
+}
+
+/**
  * Generate a random 6‑digit alphanumeric code for quiz access.
  * @returns {string}
  */
@@ -167,7 +182,10 @@ const server = http.createServer(async (req, res) => {
     quizzes[code] = {
       title,
       questions,
-      participants: {}
+      participants: {},
+      // maintain whitelist and blacklist of IP addresses for access control
+      whitelist: new Set(),
+      blacklist: new Set()
     };
     // Respond with join code and teacher link
     const bodyHtml = `
@@ -196,7 +214,8 @@ const server = http.createServer(async (req, res) => {
     const body = await parseBody(req);
     const code = (body.code || '').toUpperCase().trim();
     const name = (body.name || '').trim();
-    if (!quizzes[code]) {
+    const quiz = quizzes[code];
+    if (!quiz) {
       res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(page('Quiz Not Found', `<h1>Quiz Not Found</h1><p class="error">No quiz exists with code ${code}.</p><p><a href="/join" class="btn">Try Again</a></p>`));
       return;
@@ -206,12 +225,27 @@ const server = http.createServer(async (req, res) => {
       res.end(page('Invalid Name', `<h1>Invalid Name</h1><p class="error">Please provide your name.</p><p><a href="/join" class="btn">Back</a></p>`));
       return;
     }
+    // Determine requester IP; Render proxies may forward real IP via x-forwarded-for
+    const ipHeader = req.headers['x-forwarded-for'];
+    const ip = (Array.isArray(ipHeader) ? ipHeader[0] : ipHeader) || req.socket.remoteAddress || '';
+    // Access control: deny if in blacklist or not in whitelist when whitelist is non-empty
+    if (quiz.blacklist && quiz.blacklist.has(ip)) {
+      res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(page('Access Denied', `<h1>Access Denied</h1><p class="error">Your device is not permitted to join this quiz.</p><p><a href="/" class="btn">Home</a></p>`));
+      return;
+    }
+    if (quiz.whitelist && quiz.whitelist.size > 0 && !quiz.whitelist.has(ip)) {
+      res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(page('Access Restricted', `<h1>Access Restricted</h1><p class="error">This quiz is restricted to approved participants.</p><p><a href="/" class="btn">Home</a></p>`));
+      return;
+    }
     // Create participant ID
     const pid = generateCode();
-    quizzes[code].participants[pid] = {
+    quiz.participants[pid] = {
       name,
       answers: [],
-      score: 0
+      score: 0,
+      ip
     };
     // Redirect to take quiz
     res.writeHead(302, { Location: `/take/${code}/${pid}` });
@@ -231,17 +265,25 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     const participant = quiz.participants[pid];
-    // If POST, record answer
+    // If POST, record answer(s)
     if (req.method === 'POST') {
       const body = await parseBody(req);
-      const answerIndex = parseInt(body.answer);
       const qIndex = participant.answers.length;
-      if (!isNaN(answerIndex) && quiz.questions[qIndex]) {
-        participant.answers.push(answerIndex);
-        // update score if correct
-        if (answerIndex === quiz.questions[qIndex].correct) {
-          participant.score++;
-        }
+      const q = quiz.questions[qIndex];
+      let selected;
+      if (body.answer === undefined) {
+        selected = [];
+      } else if (Array.isArray(body.answer)) {
+        selected = body.answer.map(x => parseInt(x)).filter(n => !isNaN(n));
+      } else {
+        const val = parseInt(body.answer);
+        selected = isNaN(val) ? [] : [val];
+      }
+      participant.answers.push(selected);
+      // update score if correct (arrays equal)
+      const correctIndices = Array.isArray(q.correct) ? q.correct : [q.correct];
+      if (arraysEqualUnordered(selected, correctIndices)) {
+        participant.score++;
       }
     }
     const currentIndex = participant.answers.length;
@@ -255,19 +297,45 @@ const server = http.createServer(async (req, res) => {
     const q = quiz.questions[currentIndex];
     let optionsHtml = '';
     q.options.forEach((opt, idx) => {
-      optionsHtml += `<label><input type="radio" name="answer" value="${idx}" required> ${opt}</label><br>`;
+      const text = typeof opt === 'string' ? opt : opt.text;
+      const image = opt.image ? `<br><img src="${opt.image}" alt="option image" style="max-width:200px;max-height:150px;">` : '';
+      optionsHtml += `<label class="option-card"><input type="checkbox" name="answer" value="${idx}"> <span>${text}</span>${image}</label>`;
     });
+    const qImage = q.questionImage ? `<img src="${q.questionImage}" alt="question image" style="max-width:300px;max-height:200px;">` : '';
     const bodyHtml = `
       <h1>${quiz.title}</h1>
       <h2>Question ${currentIndex + 1} of ${quiz.questions.length}</h2>
       <p>${q.question}</p>
+      ${qImage}
       <form method="POST" action="/take/${code}/${pid}">
-        ${optionsHtml}
-        <button type="submit" class="btn">Submit Answer</button>
+        <div class="options-container">${optionsHtml}</div>
+        <button type="submit" class="btn">Submit</button>
       </form>
     `;
+    // supply minimal CSS for option cards
+    const styles = `
+      <style>
+        .options-container { display: flex; flex-wrap: wrap; gap: 10px; }
+        .option-card {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+          justify-content: flex-start;
+          width: 200px;
+          min-height: 120px;
+          padding: 10px;
+          border-radius: 6px;
+          background-color: #f0f0f0;
+        }
+        .option-card:nth-child(1) { background-color: #4e79a7; color: white; }
+        .option-card:nth-child(2) { background-color: #59a14f; color: white; }
+        .option-card:nth-child(3) { background-color: #f28e2b; color: white; }
+        .option-card:nth-child(4) { background-color: #e15759; color: white; }
+        .option-card input { margin-right: 6px; }
+        img { margin-top: 8px; }
+      </style>`;
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(page(`Question ${currentIndex + 1}`, bodyHtml));
+    res.end(page(`Question ${currentIndex + 1}`, styles + bodyHtml));
     return;
   }
 
@@ -284,9 +352,37 @@ const server = http.createServer(async (req, res) => {
     }
     const participant = quiz.participants[pid];
     const total = quiz.questions.length;
+    const percent = total > 0 ? Math.round((participant.score / total) * 100) : 0;
+    // Build detailed results listing
+    let details = '<ol>';
+    quiz.questions.forEach((q, i) => {
+      const your = participant.answers[i] || [];
+      const correctIndices = Array.isArray(q.correct) ? q.correct : [q.correct];
+      const yourTexts = your.map(idx => {
+        const opt = q.options[idx];
+        return typeof opt === 'string' ? opt : opt.text;
+      });
+      const correctTexts = correctIndices.map(idx => {
+        const opt = q.options[idx];
+        return typeof opt === 'string' ? opt : opt.text;
+      });
+      const isCorrect = arraysEqualUnordered(your, correctIndices);
+      details += `<li><strong>Q${i+1}:</strong> ${q.question}<br>`;
+      details += `<em>Your answer${yourTexts.length !== 1 ? 's' : ''}:</em> ${yourTexts.join(', ') || '(none)'}<br>`;
+      details += `<em>Correct answer${correctTexts.length !== 1 ? 's' : ''}:</em> ${correctTexts.join(', ')}<br>`;
+      details += isCorrect ? '<span style="color:green">Correct</span>' : '<span style="color:red">Incorrect</span>';
+      details += '</li>';
+    });
+    details += '</ol>';
+    const points = participant.score * 100;
     const bodyHtml = `
       <h1>${quiz.title} – Results</h1>
-      <p>Thank you, ${participant.name}! You answered ${participant.score} out of ${total} questions correctly.</p>
+      <p>Thank you, ${participant.name}!</p>
+      <p>You answered <strong>${participant.score}</strong> out of <strong>${total}</strong> questions correctly.</p>
+      <p>Percentage: <strong>${percent}%</strong></p>
+      <p>Points earned: <strong>${points}</strong></p>
+      <h2>Question Breakdown</h2>
+      ${details}
       <p><a href="/" class="btn">Return Home</a></p>
     `;
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -304,21 +400,82 @@ const server = http.createServer(async (req, res) => {
       res.end(page('Quiz Not Found', `<h1>Quiz Not Found</h1><p class="error">No quiz exists with code ${code}.</p>`));
       return;
     }
+    // Build rows sorted by score descending
     let rows = '';
-    Object.entries(quiz.participants).forEach(([pid, p]) => {
-      rows += `<tr><td>${p.name}</td><td>${p.score}</td><td>${quiz.questions.length}</td></tr>`;
+    const participantsEntries = Object.entries(quiz.participants);
+    participantsEntries.sort((a, b) => b[1].score - a[1].score);
+    participantsEntries.forEach(([pid, p]) => {
+      rows += `<tr><td>${p.name}</td><td>${p.score}</td><td>${quiz.questions.length}</td><td>${p.ip || ''}</td><td>
+        <form method="POST" action="/whitelist/${code}" style="display:inline">
+          <input type="hidden" name="ip" value="${p.ip || ''}">
+          <button type="submit">Whitelist</button>
+        </form>
+        <form method="POST" action="/blacklist/${code}" style="display:inline">
+          <input type="hidden" name="ip" value="${p.ip || ''}">
+          <button type="submit">Blacklist</button>
+        </form>
+      </td></tr>`;
     });
+    // Display current whitelist and blacklist
+    const whitelistList = Array.from(quiz.whitelist || []).map(ip => `<li>${ip}</li>`).join('') || '<li>None</li>';
+    const blacklistList = Array.from(quiz.blacklist || []).map(ip => `<li>${ip}</li>`).join('') || '<li>None</li>';
     const bodyHtml = `
       <h1>Scoreboard – ${quiz.title}</h1>
       <p>Quiz Code: ${code}</p>
       <table>
-        <thead><tr><th>Participant</th><th>Correct</th><th>Total Questions</th></tr></thead>
+        <thead><tr><th>Participant</th><th>Correct</th><th>Total</th><th>IP Address</th><th>Access</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
+      <h3>Whitelist</h3><ul>${whitelistList}</ul>
+      <h3>Blacklist</h3><ul>${blacklistList}</ul>
       <p><a href="/" class="btn">Home</a></p>
     `;
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(page('Scoreboard', bodyHtml));
+    return;
+  }
+
+  // Add an IP to the whitelist
+  if (req.method === 'POST' && pathname.startsWith('/whitelist/')) {
+    const parts = pathname.split('/');
+    const code = parts[2];
+    const quiz = quizzes[code];
+    if (!quiz) {
+      res.writeHead(404);
+      res.end('Quiz not found');
+      return;
+    }
+    const body = await parseBody(req);
+    const ip = (body.ip || '').trim();
+    if (ip) {
+      quiz.whitelist.add(ip);
+      // Also remove from blacklist if present
+      quiz.blacklist.delete(ip);
+    }
+    res.writeHead(302, { Location: `/scoreboard/${code}` });
+    res.end();
+    return;
+  }
+
+  // Add an IP to the blacklist
+  if (req.method === 'POST' && pathname.startsWith('/blacklist/')) {
+    const parts = pathname.split('/');
+    const code = parts[2];
+    const quiz = quizzes[code];
+    if (!quiz) {
+      res.writeHead(404);
+      res.end('Quiz not found');
+      return;
+    }
+    const body = await parseBody(req);
+    const ip = (body.ip || '').trim();
+    if (ip) {
+      quiz.blacklist.add(ip);
+      // Removing from whitelist to avoid conflict
+      quiz.whitelist.delete(ip);
+    }
+    res.writeHead(302, { Location: `/scoreboard/${code}` });
+    res.end();
     return;
   }
 
