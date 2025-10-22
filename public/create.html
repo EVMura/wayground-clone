@@ -29,6 +29,15 @@
   </form>
   <script>
     let questionCount = 0;
+    // helper to read file as DataURL
+    function toDataURL(file) {
+      return new Promise((resolve) => {
+        if (!file) return resolve(null);
+        const reader = new FileReader();
+        reader.onload = e => resolve(e.target.result);
+        reader.readAsDataURL(file);
+      });
+    }
     function addQuestion() {
       const container = document.getElementById('questions');
       const div = document.createElement('div');
@@ -38,35 +47,51 @@
         <label>Question Text:
           <input type="text" id="q${questionCount}" required>
         </label>
-        <label>Option 1:
-          <input type="text" id="o${questionCount}_0" required>
+        <label>Question Image:
+          <input type="file" accept="image/*" id="qi${questionCount}">
         </label>
-        <label>Option 2:
-          <input type="text" id="o${questionCount}_1" required>
-        </label>
-        <label>Option 3:
-          <input type="text" id="o${questionCount}_2" required>
-        </label>
-        <label>Option 4:
-          <input type="text" id="o${questionCount}_3" required>
-        </label>
-        <label>Correct Option (1–4):
-          <input type="number" id="c${questionCount}" min="1" max="4" required>
-        </label>
+        <div>
+          <h4>Options</h4>
+          ${[0,1,2,3].map(j => `
+            <div style="margin-bottom:8px;">
+              <label>Option ${j+1} Text:
+                <input type="text" id="o${questionCount}_${j}" required>
+              </label>
+              <label>Image:
+                <input type="file" accept="image/*" id="oi${questionCount}_${j}">
+              </label>
+              <label><input type="checkbox" id="c${questionCount}_${j}"> Correct</label>
+            </div>
+          `).join('')}
+        </div>
       `;
       container.appendChild(div);
       questionCount++;
     }
-    document.querySelector('form').addEventListener('submit', function(e) {
+    document.querySelector('form').addEventListener('submit', async function(e) {
+      // build questions array
       const questions = [];
       for (let i = 0; i < questionCount; i++) {
-        const text = document.getElementById('q' + i).value;
+        const qText = document.getElementById('q' + i).value;
+        const qImgFile = document.getElementById('qi' + i).files[0];
+        const qImg = await toDataURL(qImgFile);
         const opts = [];
+        const correctIdxs = [];
         for (let j = 0; j < 4; j++) {
-          opts.push(document.getElementById('o' + i + '_' + j).value);
+          const optText = document.getElementById('o' + i + '_' + j).value;
+          const optImgFile = document.getElementById('oi' + i + '_' + j).files[0];
+          const optImg = await toDataURL(optImgFile);
+          opts.push({ text: optText, image: optImg });
+          const checked = document.getElementById('c' + i + '_' + j).checked;
+          if (checked) correctIdxs.push(j);
         }
-        const corr = parseInt(document.getElementById('c' + i).value) - 1;
-        questions.push({ question: text, options: opts, correct: corr });
+        // ensure at least one correct
+        if (correctIdxs.length === 0) {
+          alert('Please mark at least one correct option for question ' + (i+1));
+          e.preventDefault();
+          return;
+        }
+        questions.push({ question: qText, questionImage: qImg, options: opts, correct: correctIdxs });
       }
       document.getElementById('data').value = JSON.stringify(questions);
     });
