@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Join Quiz</title>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; margin: 40px; }
+    h1 { color: #333; }
+    input[type="text"] { width: 100%; max-width: 400px; padding: 8px; margin: 4px 0 10px; }
+    .btn { display: inline-block; padding: 8px 16px; background: #007bff; color: white; text-decoration: none; border-radius: 4px; margin-top: 10px; }
+    .btn:hover { background: #0056b3; }
+    button { padding: 8px 16px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Join a Quiz</h1>
+  <form action="/join" method="POST">
+    <label>Quiz Code:
+      <input type="text" name="code" required>
+    </label>
+    <label>Your Name:
+      <input type="text" name="name" required>
+    </label>
+    <button type="submit" class="btn">Join</button>
+  </form>
+  <p><a href="/" class="btn">Back to Home</a></p>
+</body>
+</html>
