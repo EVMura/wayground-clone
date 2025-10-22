@@ -5,14 +5,57 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Create Quiz</title>
   <style>
-    body { font-family: Arial, Helvetica, sans-serif; margin: 40px; }
-    h1 { color: #333; }
-    input[type="text"], input[type="number"] { width: 100%; max-width: 400px; padding: 8px; margin: 4px 0 10px; }
-    label { display: block; margin-top: 8px; }
-    .question { border: 1px solid #ccc; padding: 10px; margin-bottom: 15px; border-radius: 4px; }
-    .btn { display: inline-block; padding: 8px 16px; background: #007bff; color: white; text-decoration: none; border-radius: 4px; margin-top: 10px; }
-    .btn:hover { background: #0056b3; }
-    button { padding: 8px 16px; margin-top: 10px; }
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      background-color: #0d0221;
+      color: #f5f5f5;
+      margin: 40px;
+      text-align: center;
+    }
+    h1 {
+      color: #f5f5f5;
+    }
+    form {
+      max-width: 800px;
+      margin: 0 auto;
+      text-align: left;
+    }
+    label { display: block; margin-bottom: 8px; }
+    input[type="text"],
+    input[type="number"],
+    input[type="file"] {
+      width: 100%;
+      padding: 8px;
+      margin: 4px 0 10px;
+      background-color: #1e024a;
+      color: #fff;
+      border: 1px solid #5a2ea6;
+      border-radius: 4px;
+    }
+    .question-card {
+      border: 1px solid #5a2ea6;
+      padding: 12px;
+      margin-bottom: 20px;
+      border-radius: 6px;
+      background-color: #1c0140;
+    }
+    .options {
+      margin-left: 10px;
+    }
+    .btn {
+      display: inline-block;
+      padding: 10px 20px;
+      margin-top: 10px;
+      border-radius: 6px;
+      background-color: #7b2cbf;
+      color: #fff;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+    }
+    .btn:hover {
+      background-color: #5a189a;
+    }
   </style>
 </head>
 <body>
@@ -23,13 +66,12 @@
     </label>
     <div id="questions"></div>
     <input type="hidden" name="data" id="data">
-    <button type="button" onclick="addQuestion()" class="btn" type="button">Add Question</button>
+    <button type="button" class="btn" onclick="addQuestion()">Add Question</button>
     <br>
     <button type="submit" class="btn">Create Quiz</button>
   </form>
   <script>
     let questionCount = 0;
-    // helper to read file as DataURL
     function toDataURL(file) {
       return new Promise((resolve) => {
         if (!file) return resolve(null);
@@ -41,7 +83,7 @@
     function addQuestion() {
       const container = document.getElementById('questions');
       const div = document.createElement('div');
-      div.className = 'question';
+      div.className = 'question-card';
       div.innerHTML = `
         <h3>Question ${questionCount + 1}</h3>
         <label>Question Text:
@@ -50,17 +92,19 @@
         <label>Question Image:
           <input type="file" accept="image/*" id="qi${questionCount}">
         </label>
-        <div>
+        <div class="options">
           <h4>Options</h4>
           ${[0,1,2,3].map(j => `
-            <div style="margin-bottom:8px;">
+            <div style="margin-bottom: 8px;">
               <label>Option ${j+1} Text:
                 <input type="text" id="o${questionCount}_${j}" required>
               </label>
               <label>Image:
                 <input type="file" accept="image/*" id="oi${questionCount}_${j}">
               </label>
-              <label><input type="checkbox" id="c${questionCount}_${j}"> Correct</label>
+              <label style="display:inline-block;margin-left:8px;">
+                <input type="checkbox" id="c${questionCount}_${j}"> Correct
+              </label>
             </div>
           `).join('')}
         </div>
@@ -69,7 +113,6 @@
       questionCount++;
     }
     document.querySelector('form').addEventListener('submit', async function(e) {
-      // build questions array
       const questions = [];
       for (let i = 0; i < questionCount; i++) {
         const qText = document.getElementById('q' + i).value;
@@ -82,10 +125,10 @@
           const optImgFile = document.getElementById('oi' + i + '_' + j).files[0];
           const optImg = await toDataURL(optImgFile);
           opts.push({ text: optText, image: optImg });
-          const checked = document.getElementById('c' + i + '_' + j).checked;
-          if (checked) correctIdxs.push(j);
+          if (document.getElementById('c' + i + '_' + j).checked) {
+            correctIdxs.push(j);
+          }
         }
-        // ensure at least one correct
         if (correctIdxs.length === 0) {
           alert('Please mark at least one correct option for question ' + (i+1));
           e.preventDefault();
